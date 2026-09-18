@@ -1,636 +1,475 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>差旅记账本 PWA云同步版</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js"></script>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#2563eb">
-<style>
-*{box-sizing:border-box;}
-body{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
-.main-container{flex:1;overflow-y:auto;padding:1rem;padding-bottom:80px;}
-.tab-bar{height:60px;display:flex;justify-content:space-around;align-items:center;border-top:1px solid #eee;background:#fff;position:fixed;bottom:0;left:0;right:0;z-index:10;}
-.tab-bar button{font-size:15px;}
-.tab-bar button.active{color:#2563eb;font-weight:bold;}
-.page{display:none;}
-.page.active{display:block;}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,0.4);display:none;align-items:center;justify-content:center;z-index:50;}
-.modal.active{display:flex;}
-.modal-content{background:#fff;width:92%;max-width:600px;max-height:85vh;overflow-y:auto;border-radius:12px;padding:1rem;}
-.sync-status{position:fixed;top:5px;right:5px;padding:4px 8px;border-radius:6px;font-size:12px;color:white;z-index:99;}
-.sync-online{background:#22c55e;}
-.sync-offline{background:#f97316;}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>差旅记账PWA</title>
+  <link rel="manifest" href="manifest.json">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Firebase CDN -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
+  <script>
+    // ==========你的Firebase配置==========
+    const firebaseConfig = {
+      apiKey: "AIzaSyDf-uRiaSEKlUcOLVLhat0Max9YsianJWw",
+      authDomain: "travel-bill-pwa.firebaseapp.com",
+      projectId: "travel-bill-pwa",
+      storageBucket: "travel-bill-pwa.firebasestorage.app",
+      messagingSenderId: "659146011260",
+      appId: "1:659146011260:web:22ef9d9c75628e19cecff9",
+      measurementId: "G-MLNEWK4C12"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    // 全局状态
+    const state = {
+      currentPage: 'home',
+      records: [],
+      deletedRecords: [],
+      assets: [],
+      currencies: [],
+      syncQueue: [],
+      isOnline: navigator.onLine
+    };
+    // IndexedDB简易封装
+    const dbName = 'travelBillDB';
+    const storeName = 'mainStore';
+    let idb;
+    function openDB() {
+      return new Promise((res, rej) => {
+        const req = indexedDB.open(dbName, 1);
+        req.onupgradeneeded = e => {
+          idb = e.target.result;
+          idb.createObjectStore(storeName);
+        };
+        req.onsuccess = e => {
+          idb = e.target.result; res(idb);
+        };
+        req.onerror = e => rej(e.target.error);
+      });
+    }
+    async function idbSave(key, data) {
+      await openDB();
+      const tx = idb.transaction(storeName, 'readwrite');
+      tx.objectStore(storeName).put(data, key);
+    }
+    async function idbLoad(key) {
+      await openDB();
+      const tx = idb.transaction(storeName, 'readonly');
+      return tx.objectStore(storeName).get(key);
+    }
+    // 云端同步函数
+    async function syncToCloud() {
+      if (!state.isOnline) return;
+      try {
+        // 保存记录
+        await db.collection('records').doc('data').set({list: state.records});
+        await db.collection('deletedRecords').doc('data').set({list: state.deletedRecords});
+        await db.collection('assets').doc('data').set({list: state.assets});
+        await db.collection('currencies').doc('data').set({list: state.currencies});
+        console.log("✅ 同步云端成功");
+      } catch(e) {
+        console.error("同步失败",e);
+      }
+    }
+    async function loadFromCloud() {
+      if (!state.isOnline) return;
+      try {
+        const recSnap = await db.collection('records').doc('data').get();
+        const delSnap = await db.collection('deletedRecords').doc('data').get();
+        const assetSnap = await db.collection('assets').doc('data').get();
+        const currSnap = await db.collection('currencies').doc('data').get();
+        if(recSnap.exists) state.records = recSnap.data().list;
+        if(delSnap.exists) state.deletedRecords = delSnap.data().list;
+        if(assetSnap.exists) state.assets = assetSnap.data().list;
+        if(currSnap.exists) state.currencies = currSnap.data().list;
+        await saveAllLocal();
+        render();
+        console.log("✅ 从云端拉取数据完成");
+      }catch(e){
+        console.error("拉取云端失败",e);
+      }
+    }
+    async function saveAllLocal(){
+      await idbSave('records', state.records);
+      await idbSave('deletedRecords', state.deletedRecords);
+      await idbSave('assets', state.assets);
+      await idbSave('currencies', state.currencies);
+    }
+    // 本地加载全部数据
+    async function loadAllLocal(){
+      state.records = await idbLoad('records') || [];
+      state.deletedRecords = await idbLoad('deletedRecords') || [];
+      state.assets = await idbLoad('assets') || [];
+      state.currencies = await idbLoad('currencies') || [{code:"USD",rate:6.72,isDefault:false}];
+    }
+    // 网络监听
+    window.addEventListener('online', async ()=>{
+      state.isOnline=true;
+      await loadFromCloud();
+    });
+    window.addEventListener('offline', ()=> state.isOnline=false);
+    // 生成唯一ID
+    function genId(){
+      return Date.now().toString(36)+Math.random().toString(36).slice(2);
+    }
+    // 保存并自动触发同步
+    async function saveData(){
+      await saveAllLocal();
+      syncToCloud();
+    }
+    // 页面渲染入口
+    function render(){
+      const app = document.getElementById('app');
+      if(state.currentPage==='home') renderHome(app);
+      else if(state.currentPage==='calendar') renderCalendar(app);
+      else if(state.currentPage==='asset') renderAsset(app);
+      else if(state.currentPage==='setting') renderSetting(app);
+    }
+    // 首页
+    function renderHome(app){
+      const travelAssets = state.assets.filter(a=>a.type==='travel');
+      const activityAssets = state.assets.filter(a=>a.type==='activity');
+      const travelTotal = travelAssets.reduce((s,i)=>s+i.amount,0);
+      const travelSpend = state.records.filter(r=>r.assetType==='travel'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
+      const travelRemain = travelTotal - travelSpend;
+
+      const actTotal = activityAssets.reduce((s,i)=>s+i.amount,0);
+      const actSpend = state.records.filter(r=>r.assetType==='activity'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
+      const actRemain = actTotal - actSpend;
+
+      const allRecords = [...state.records].sort((a,b)=>new Date(b.time)-new Date(a.time));
+
+      app.innerHTML=`
+      <div class="h-screen flex flex-col">
+        <div class="flex-1 flex flex-col">
+          <div class="h-[20%] p-2 border-b">
+            <div class="flex justify-between items-center">
+              <h2 class="text-lg font-bold">首页</h2>
+              <button onclick="showAllRecords()" class="text-blue-600">所有明细</button>
+            </div>
+          </div>
+          <div class="h-[60%] p-2 overflow-auto border-b">
+            <h3 class="font-semibold mb-2">收支明细</h3>
+            <div id="recordList" class="space-y-1">
+              ${allRecords.slice(0,8).map(r=>`
+                <div class="flex justify-between border p-1 rounded">
+                  <div>${r.time} ${r.type==='expense'?'-':'+'}${r.rmbAmount}元 ${r.category} ${r.note||''}</div>
+                  <div class="space-x-2">
+                    <button onclick="editRecord('${r.id}')" class="text-blue-500">修改</button>
+                    <button onclick="delRecord('${r.id}')" class="text-red-500">删除</button>
+                  </div>
+                </div>`).join('')}
+            </div>
+            <div class="mt-2 text-right">
+              <button onclick="showRecycleBin()" class="text-orange-600">删除记录（回收站）</button>
+            </div>
+          </div>
+          <div class="h-[20%] p-2">
+            <button onclick="openBillPage()" class="w-full bg-blue-500 text-white py-2 rounded mb-2">开始记账</button>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="border p-2 rounded">
+                <canvas id="travelChart"></canvas>
+                <div>差旅资产：总资产${travelTotal.toFixed(2)}，已支出${travelSpend.toFixed(2)}，剩余${travelRemain.toFixed(2)} RMB</div>
+              </div>
+              <div class="border p-2 rounded">
+                <canvas id="actChart"></canvas>
+                <div>活动资产：总资产${actTotal.toFixed(2)}，已支出${actSpend.toFixed(2)}，剩余${actRemain.toFixed(2)} RMB</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="flex border-t">
+          <button onclick="switchPage('home')" class="flex-1 py-3 ${state.currentPage==='home'?'bg-blue-100':''}">首页</button>
+          <button onclick="switchPage('calendar')" class="flex-1 py-3 ${state.currentPage==='calendar'?'bg-blue-100':''}">日历</button>
+          <button onclick="switchPage('asset')" class="flex-1 py-3 ${state.currentPage==='asset'?'bg-blue-100':''}">资产</button>
+          <button onclick="switchPage('setting')" class="flex-1 py-3 ${state.currentPage==='setting'?'bg-blue-100':''}">设置</button>
+        </div>
+      </div>`;
+      setTimeout(()=>{
+        new Chart(document.getElementById('travelChart'),{type:'pie',data:{labels:["已支出","剩余"],datasets:[{data:[travelSpend,travelRemain],backgroundColor:['#ef4444','#22c55e']}]},options:{responsive:true,maintainAspectRatio:true}});
+        new Chart(document.getElementById('actChart'),{type:'pie',data:{labels:["已支出","剩余"],datasets:[{data:[actSpend,actRemain],backgroundColor:['#ef4444','#22c55e']}]},options:{responsive:true,maintainAspectRatio:true}});
+      },100);
+    }
+    // 切换页面
+    function switchPage(page){
+      state.currentPage=page; render();
+    }
+    // 记账弹窗
+    window.openBillPage = function(){
+      const defaultCurrency = state.currencies.find(c=>c.isDefault) || state.currencies[0];
+      const defaultRate = defaultCurrency?.rate || 1;
+      const assetTypes = state.assets.map(a=>`<option value="${a.type}">${a.name||a.type}</option>`).join('');
+      const currencyOpts = state.currencies.map(c=>`<option value="${c.code}" data-rate="${c.rate}">${c.code}</option>`).join('');
+      const catOpts = `
+      <option value="交通-飞机">交通-飞机</option>
+      <option value="交通-火车">交通-火车</option>
+      <option value="交通-出租">交通-出租</option>
+      <option value="交通-租车">交通-租车</option>
+      <option value="交通-停车费">交通-停车费</option>
+      <option value="交通-公共交通">交通-公共交通</option>
+      <option value="交通-加油">交通-加油</option>
+      <option value="住宿">住宿</option>
+      <option value="餐饮-早餐">餐饮-早餐</option>
+      <option value="餐饮-中餐">餐饮-中餐</option>
+      <option value="餐饮-晚餐">餐饮-晚餐</option>
+      <option value="餐饮-夜宵">餐饮-夜宵</option>
+      <option value="餐饮-咖啡饮品">餐饮-咖啡饮品</option>
+      <option value="招待-餐饮">招待-餐饮</option>
+      <option value="招待-娱乐">招待-娱乐</option>
+      <option value="招待-礼物">招待-礼物</option>
+      <option value="招待-其他">招待-其他</option>
+      <option value="通讯-话费">通讯-话费</option>
+      <option value="通讯-网络">通讯-网络</option>
+      <option value="其他">其他</option>`;
+      const html = `
+      <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-md:w-full max-w-md rounded p-4">
+          <div class="flex gap-2 mb-3">
+            <label class="flex items-center"><input type="radio" name="billType" value="expense" checked>支出</label>
+            <label class="flex items-center"><input type="radio" name="billType" value="income">收入</label>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mb-3">
+            <input type="number" id="billAmount" placeholder="金额" class="border p-2">
+            <select id="billAssetType" class="border p-2">${assetTypes}</select>
+            <select id="billCurrency" class="border p-2" onchange="calcRmb()">${currencyOpts}</select>
+          </div>
+          <div class="text-sm text-gray-500 mb-3">换算RMB：<span id="rmbPreview">0</span></div>
+          <select id="billCategory" class="border p-2 w-full mb-3">${catOpts}</select>
+          <textarea id="billNote" placeholder="备注" class="border p-2 w-full mb-3"></textarea>
+          <div class="flex gap-2">
+            <button onclick="submitBill()" class="flex-1 bg-blue-500 text-white py-2 rounded">保存</button>
+            <button onclick="closeBillModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">取消</button>
+          </div>
+        </div>
+      </div>`;
+      document.getElementById('modal').innerHTML = html;
+    }
+    window.calcRmb = function(){
+      const amount = Number(document.getElementById('billAmount').value||0);
+      const currSel = document.getElementById('billCurrency');
+      const rate = Number(currSel.options[currSel.selectedIndex].dataset.rate);
+      const rmb = amount * rate;
+      document.getElementById('rmbPreview').textContent = rmb.toFixed(2);
+    }
+    window.submitBill = async function(){
+      const type = document.querySelector('input[name="billType"]:checked').value;
+      const amount = Number(document.getElementById('billAmount').value);
+      const assetType = document.getElementById('billAssetType').value;
+      const currency = document.getElementById('billCurrency').value;
+      const category = document.getElementById('billCategory').value;
+      const note = document.getElementById('billNote').value;
+      const currItem = state.currencies.find(c=>c.code===currency);
+      const rmbAmount = amount * currItem.rate;
+      const rec = {id:genId(),time:new Date().toLocaleString(),type,amount,currency,rmbAmount,assetType,category,note};
+      state.records.push(rec);
+      await saveData();
+      closeBillModal(); render();
+    }
+    window.closeBillModal = function(){document.getElementById('modal').innerHTML='';}
+    // 删除记录，移入回收站
+    window.delRecord = async function(id){
+      const idx = state.records.findIndex(r=>r.id===id);
+      if(idx===-1) return;
+      const item = state.records.splice(idx,1)[0];
+      state.deletedRecords.push(item);
+      await saveData(); render();
+    }
+    window.editRecord = function(id){alert("编辑功能，你可以后续扩展");}
+    window.showAllRecords = function(){
+      const all = [...state.records].sort((a,b)=>new Date(b.time)-new Date(a.time));
+      let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
+      <h2 class="font-bold text-lg mb-2">全部明细 <button onclick="closeModal()" class="float-right">关闭</button></h2>
+      ${all.map(r=>`<div class="border p-1 my-1">${r.time} ${r.type} ${r.rmbAmount}元 ${r.category} ${r.note||''}</div>`).join('')}</div></div>`;
+      document.getElementById('modal').innerHTML=html;
+    }
+    window.showRecycleBin = function(){
+      const list = state.deletedRecords;
+      let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
+      <h2 class="font-bold text-lg mb-2">回收站 <button onclick="closeModal()" class="float-right">关闭</button></h2>
+      ${list.map(r=>`<div class="border p-1 my-1 flex justify-between">
+      <span>${r.time} ${r.type} ${r.rmbAmount}元 ${r.category}</span>
+      <button onclick="restoreRecord('${r.id}')" class="text-green-500">恢复</button>
+      </div>`).join('')}
+      </div></div>`;
+      document.getElementById('modal').innerHTML=html;
+    }
+    window.restoreRecord = async function(id){
+      const idx = state.deletedRecords.findIndex(r=>r.id===id);
+      if(idx===-1) return;
+      const item = state.deletedRecords.splice(idx,1)[0];
+      state.records.push(item);
+      await saveData(); render(); closeModal();
+    }
+    window.closeModal = function(){document.getElementById('modal').innerHTML='';}
+
+    // 日历页面
+    function renderCalendar(app){
+      const now = new Date();
+      let cy = now.getFullYear(), cm = now.getMonth();
+      app.innerHTML=`
+      <div class="h-screen flex flex-col">
+        <div class="p-2 border-b flex justify-between items-center">
+          <button onclick="changeMonth(-1)">上一月</button>
+          <h2 id="calTitle">${cy}年${cm+1}月</h2>
+          <button onclick="changeMonth(1)">下一月</button>
+        </div>
+        <div id="calGrid" class="grid grid-cols-7 gap-1 p-2 flex-1 overflow-auto"></div>
+        <div id="dayRecords" class="border-t p-2 max-h-[25vh] overflow-auto"></div>
+        <div class="flex border-t">
+          <button onclick="switchPage('home')" class="flex-1 py-3">首页</button>
+          <button onclick="switchPage('calendar')" class="flex-1 py-3 bg-blue-100">日历</button>
+          <button onclick="switchPage('asset')" class="flex-1 py-3">资产</button>
+          <button onclick="switchPage('setting')" class="flex-1 py-3">设置</button>
+        </div>
+      </div>`;
+      renderCalGrid(cy,cm);
+    }
+    window.changeMonth = function(delta){
+      const title = document.getElementById('calTitle').innerText;
+      let [y,m] = title.match(/(\d+)/g).map(Number);
+      m += delta;
+      if(m>11){m=0;y++}
+      if(m<0){m=11;y--}
+      document.getElementById('calTitle').innerText = `${y}年${m+1}月`;
+      renderCalGrid(y,m);
+    }
+    function renderCalGrid(y,m){
+      const grid = document.getElementById('calGrid');
+      const firstDay = new Date(y,m,1).getDay();
+      const totalDays = new Date(y,m+1,0).getDate();
+      let html = '';
+      for(let i=0;i<firstDay;i++) html += `<div></div>`;
+      for(let d=1;d<=totalDays;d++){
+        const dayStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const dayRecs = state.records.filter(r=>r.time.startsWith(dayStr));
+        const sum = dayRecs.reduce((s,i)=>i.type==='expense'?s-i.rmbAmount:s+i.rmbAmount,0);
+        html += `<div class="border p-1 text-center cursor-pointer" onclick="showDayRec('${dayStr}')">${d}<br><span class="text-xs ${sum>=0?'text-green-600':'text-red-600'}">${sum.toFixed(2)}</span></div>`;
+      }
+      grid.innerHTML = html;
+    }
+    window.showDayRec = function(dayStr){
+      const recs = state.records.filter(r=>r.time.startsWith(dayStr));
+      const box = document.getElementById('dayRecords');
+      box.innerHTML = `<div class="font-semibold">${dayStr}记录</div>` + recs.map(r=>`<div>${r.time} ${r.type} ${r.rmbAmount}元 ${r.category} ${r.note||''}</div>`).join('');
+    }
+    //资产页面
+    function renderAsset(app){
+      const travelAssets = state.assets.filter(a=>a.type==='travel');
+      const activityAssets = state.assets.filter(a=>a.type==='activity');
+      const travelTotal = travelAssets.reduce((s,i)=>s+i.amount,0);
+      const travelSpend = state.records.filter(r=>r.assetType==='travel'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
+      const travelRemain = travelTotal - travelSpend;
+
+      const actTotal = activityAssets.reduce((s,i)=>s+i.amount,0);
+      const actSpend = state.records.filter(r=>r.assetType==='activity'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
+      const actRemain = actTotal - actSpend;
+      app.innerHTML=`
+      <div class="h-screen flex flex-col p-2">
+        <h2 class="text-lg font-bold mb-2">资产管理</h2>
+        <button onclick="addAssetModal()" class="bg-blue-500 text-white py-2 rounded mb-2">新增资产</button>
+        <div class="border p-2 rounded mb-2">
+          <h3>差旅资产汇总(RMB)</h3>
+          <p>资产总额：${travelTotal.toFixed(2)} | 总支出：${travelSpend.toFixed(2)} | 剩余：${travelRemain.toFixed(2)}</p>
+          ${travelAssets.map(a=>`<div>${a.name}：${a.amount}</div>`).join('')}
+        </div>
+        <div class="border p-2 rounded mb-2">
+          <h3>活动资产汇总(RMB)</h3>
+          <p>资产总额：${actTotal.toFixed(2)} | 总支出：${actSpend.toFixed(2)} | 剩余：${actRemain.toFixed(2)}</p>
+          ${activityAssets.map(a=>`<div>${a.name}：${a.amount}</div>`).join('')}
+        </div>
+        <div class="flex-1"></div>
+        <div class="flex border-t">
+          <button onclick="switchPage('home')" class="flex-1 py-3">首页</button>
+          <button onclick="switchPage('calendar')" class="flex-1 py-3">日历</button>
+          <button onclick="switchPage('asset')" class="flex-1 py-3 bg-blue-100">资产</button>
+          <button onclick="switchPage('setting')" class="flex-1 py-3">设置</button>
+        </div>
+      </div>`;
+    }
+    window.addAssetModal = function(){
+      const html = `
+      <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-md rounded p-4">
+          <h3 class="font-bold mb-2">新增资产</h3>
+          <input class="border w-full p-2 mb-2" id="assetName" placeholder="资产名称">
+          <input class="border w-full p-2 mb-2" id="assetAmt" placeholder="金额RMB" type="number">
+          <select id="assetType" class="border w-full p-2 mb-2">
+            <option value="travel">差旅资产</option>
+            <option value="activity">活动资产</option>
+          </select>
+          <div class="flex gap-2">
+            <button onclick="saveAsset()" class="flex-1 bg-blue-500 text-white py-2 rounded">保存</button>
+            <button onclick="closeModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">取消</button>
+          </div>
+        </div>
+      </div>`;
+      document.getElementById('modal').innerHTML = html;
+    }
+    window.saveAsset = async function(){
+      const name = document.getElementById('assetName').value;
+      const amount = Number(document.getElementById('assetAmt').value);
+      const type = document.getElementById('assetType').value;
+      state.assets.push({id:genId(), name, amount, type, createTime:new Date().toLocaleString()});
+      await saveData(); closeModal(); render();
+    }
+    // 设置页面
+    function renderSetting(app){
+      const currHtml = state.currencies.map((c,idx)=>`
+      <div class="border p-2 my-1 flex items-center gap-2">
+        <input type="radio" name="defCurr" ${c.isDefault?'checked':''} onchange="setDefaultCurr(${idx})">
+        <span>${c.code}：${c.rate} （1${c.code}=${c.rate} RMB）</span>
+        <button onclick="delCurr(${idx})" class="text-red-500">删除</button>
+      </div>`).join('');
+      app.innerHTML=`
+      <div class="h-screen flex flex-col p-2">
+        <h2 class="text-lg font-bold mb-2">设置</h2>
+        <div class="border p-2 rounded mb-2">
+          <h3 class="font-semibold">币种管理</h3>
+          ${currHtml}
+          <div class="grid grid-cols-3 gap-2 mt-2">
+            <input id="newCode" placeholder="币种代码USD" class="border p-2">
+            <input id="newRate" placeholder="汇率 1外币=多少RMB" class="border p-2" type="number">
+            <button onclick="addCurrency()" class="bg-blue-500 text-white rounded">添加</button>
+          </div>
+        </div>
+        <div class="flex-1"></div>
+        <div class="flex border-t">
+          <button onclick="switchPage('home')" class="flex-1 py-3">首页</button>
+          <button onclick="switchPage('calendar')" class="flex-1 py-3">日历</button>
+          <button onclick="switchPage('asset')" class="flex-1 py-3">资产</button>
+          <button onclick="switchPage('setting')" class="flex-1 py-3 bg-blue-100">设置</button>
+        </div>
+      </div>`;
+    }
+    window.addCurrency = async function(){
+      const code = document.getElementById('newCode').value.trim().toUpperCase();
+      const rate = Number(document.getElementById('newRate').value);
+      if(!code || isNaN(rate)) return alert("填写币种和汇率");
+      state.currencies.push({code, rate, isDefault:false});
+      await saveData(); render();
+    }
+    window.setDefaultCurr = async function(idx){
+      state.currencies.forEach((c,i)=>c.isDefault = i===idx);
+      await saveData(); render();
+    }
+    window.delCurr = async function(idx){
+      state.currencies.splice(idx,1);
+      await saveData(); render();
+    }
+    // 初始化
+    async function init(){
+      await loadAllLocal();
+      render();
+      if(state.isOnline) loadFromCloud();
+    }
+    init();
+  </script>
 </head>
-<body>
-<div class="sync-status" id="syncStatus">离线</div>
-<div class="main-container">
-    <!--首页-->
-    <div id="page-home" class="page active">
-        <h2 class="text-xl font-bold mb-4">首页</h2>
-        <button onclick="openBillModal()" class="w-full bg-blue-500 text-white py-3 rounded-lg text-lg font-bold mb-4">开始记账</button>
-
-        <div class="border rounded-lg p-3 mb-4">
-            <div class="flex justify-between items-center mb-2">
-                <span>收支明细</span>
-                <div>
-                    <button onclick="showAllRecords()" class="text-blue-500 text-sm">所有明细</button>
-                    <button onclick="openRecycleModal()" class="text-red-500 text-sm ml-2">删除记录</button>
-                </div>
-            </div>
-            <div id="recordList" class="max-h-48 overflow-y-auto text-sm"></div>
-        </div>
-
-        <div id="assetCardsWrap">
-            <div class="border rounded-lg p-3 mb-3">
-                <div class="flex justify-between items-center mb-2">
-                    <h3 class="font-bold">资产状况A</h3>
-                    <select id="assetSelect1" onchange="renderAll()" class="border p-1 rounded text-sm">
-                        <option value="">--请选择资产--</option>
-                    </select>
-                </div>
-                <div class="flex gap-4 items-center">
-                    <div class="w-40 h-40"><canvas id="chart-asset1"></canvas></div>
-                    <div>
-                        <p>总资产：<span id="asset1Total">0.00</span> RMB</p>
-                        <p>已支出：<span id="asset1Spent">0.00</span> RMB</p>
-                        <p>剩余：<span id="asset1Left">0.00</span> RMB</p>
-                    </div>
-                </div>
-            </div>
-            <div class="border rounded-lg p-3 mb-3">
-                <div class="flex justify-between items-center mb-2">
-                    <h3 class="font-bold">资产状况B</h3>
-                    <select id="assetSelect2" onchange="renderAll()" class="border p-1 rounded text-sm">
-                        <option value="">--请选择资产--</option>
-                    </select>
-                </div>
-                <div class="flex gap-4 items-center">
-                    <div class="w-40 h-40"><canvas id="chart-asset2"></canvas></div>
-                    <div>
-                        <p>总资产：<span id="asset2Total">0.00</span> RMB</p>
-                        <p>已支出：<span id="asset2Spent">0.00</span> RMB</p>
-                        <p>剩余：<span id="asset2Left">0.00</span> RMB</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!--日历页-->
-    <div id="page-cal" class="page">
-        <h2 class="text-xl font-bold mb-4">日历</h2>
-        <div class="flex justify-between items-center mb-3">
-            <button onclick="changeMonth(-1)">◀</button>
-            <span id="calTitle"></span>
-            <button onclick="changeMonth(1)">▶</button>
-        </div>
-        <div id="calGrid" class="grid grid-cols-7 gap-1 text-center text-sm"></div>
-        <div class="mt-4 border rounded p-3">
-            <div id="dayRecord"></div>
-        </div>
-    </div>
-
-    <!--资产页-->
-    <div id="page-asset" class="page">
-        <h2 class="text-xl font-bold mb-4">资产管理</h2>
-        <button onclick="openAssetModal()" class="w-full bg-green-500 text-white py-2 rounded-lg mb-4">新增资产</button>
-        <div id="assetList"></div>
-    </div>
-
-    <!--设置页-->
-    <div id="page-setting" class="page">
-        <h2 class="text-xl font-bold mb-4">设置</h2>
-        <div class="mb-4">
-            <h4 class="font-semibold">币种管理</h4>
-            <div id="currencyList" class="my-2"></div>
-            <div class="flex gap-2 my-2">
-                <input id="newCurCode" placeholder="币种，如USD" class="border p-1 flex-1">
-                <input id="newCurRate" placeholder="汇率 1外币=多少RMB" class="border p-1 flex-1">
-                <button onclick="addCurrency()" class="bg-blue-500 text-white px-2 rounded">添加</button>
-            </div>
-        </div>
-        <div class="mt-4 border-t pt-3">
-            <h4 class="font-semibold">同步操作</h4>
-            <button onclick="forceSync()" class="bg-amber-500 text-white px-3 py-2 rounded mt-2">手动同步云端</button>
-        </div>
-    </div>
-</div>
-
-<!--底部导航 4项：首页、日历、资产、设置-->
-<div class="tab-bar">
-    <button onclick="switchPage('home')" data-tab="home">首页</button>
-    <button onclick="switchPage('cal')" data-tab="cal">日历</button>
-    <button onclick="switchPage('asset')" data-tab="asset">资产</button>
-    <button onclick="switchPage('setting')" data-tab="setting">设置</button>
-</div>
-
-<!--记账弹窗-->
-<div id="billModal" class="modal">
-    <div class="modal-content">
-        <h3 class="font-bold mb-3">记账</h3>
-        <div class="flex gap-2 mb-3">
-            <label><input type="radio" name="billType" value="expense" checked> 支出</label>
-            <label><input type="radio" name="billType" value="income"> 收入</label>
-        </div>
-        <div class="mb-2">
-            <label>金额</label>
-            <input type="number" id="billAmt" class="border w-full p-2" placeholder="输入金额">
-        </div>
-        <div class="mb-2">
-            <label>归属资产</label>
-            <select id="billAssetId" class="border w-full p-2"></select>
-        </div>
-        <div class="mb-2">
-            <label>币种</label>
-            <select id="billCurrency" class="border w-full p-2"></select>
-            <div class="text-xs text-gray-500">换算RMB：<span id="billCny">0</span></div>
-        </div>
-        <div class="mb-2">
-            <label>消费类型</label>
-            <select id="billCat" class="border w-full p-2">
-                <option value="交通-飞机">交通-飞机</option>
-                <option value="交通-火车">交通-火车</option>
-                <option value="交通-出租">交通-出租</option>
-                <option value="交通-租车">交通-租车</option>
-                <option value="交通-停车费">交通-停车费</option>
-                <option value="交通-公共交通">交通-公共交通</option>
-                <option value="交通-加油">交通-加油</option>
-                <option value="住宿">住宿</option>
-                <option value="餐饮-早餐">餐饮-早餐</option>
-                <option value="餐饮-中餐">餐饮-中餐</option>
-                <option value="餐饮-晚餐">餐饮-晚餐</option>
-                <option value="餐饮-夜宵">餐饮-夜宵</option>
-                <option value="餐饮-咖啡饮品">餐饮-咖啡饮品</option>
-                <option value="招待-餐饮">招待-餐饮</option>
-                <option value="招待-娱乐">招待-娱乐</option>
-                <option value="招待-礼物">招待-礼物</option>
-                <option value="招待-其他">招待-其他</option>
-                <option value="通讯-话费">通讯-话费</option>
-                <option value="通讯-网络">通讯-网络</option>
-                <option value="其他">其他</option>
-            </select>
-        </div>
-        <div class="mb-3">
-            <label>备注</label>
-            <input type="text" id="billNote" class="border w-full p-2">
-        </div>
-        <input type="hidden" id="editBillId">
-        <div class="flex gap-2">
-            <button onclick="saveBill()" class="flex-1 bg-blue-500 text-white py-2 rounded">保存</button>
-            <button onclick="closeBillModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">关闭</button>
-        </div>
-    </div>
-</div>
-
-<!--资产弹窗-->
-<div id="assetModal" class="modal">
-    <div class="modal-content">
-        <h3 class="font-bold mb-3">新增资产</h3>
-        <div class="mb-2">
-            <label>资产名称</label>
-            <input type="text" id="assetName" class="border w-full p-2">
-        </div>
-        <div class="mb-2">
-            <label>起始金额(外币)</label>
-            <input type="number" id="assetAmt" class="border w-full p-2">
-        </div>
-        <div class="mb-2">
-            <label>币种</label>
-            <select id="assetCurrency" class="border w-full p-2"></select>
-        </div>
-        <div class="flex gap-2">
-            <button onclick="saveAsset()" class="flex-1 bg-green-500 text-white py-2 rounded">保存</button>
-            <button onclick="closeAssetModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">关闭</button>
-        </div>
-    </div>
-</div>
-
-<!--回收站弹窗-->
-<div id="recycleModal" class="modal">
-    <div class="modal-content">
-        <h3 class="font-bold mb-3">已删除记录</h3>
-        <div id="recycleList" class="max-h-60 overflow-y-auto"></div>
-        <button onclick="closeRecycleModal()" class="w-full mt-3 bg-gray-400 text-white py-2 rounded">关闭</button>
-    </div>
-</div>
-
-<script>
-// ========== Firebase配置【在这里替换成你自己的配置！！】==========
-const firebaseConfig = {
-apiKey: "AIzaSyDf-uRiaSEKlUcOLVLhat0Max9YsianJWw",
-  authDomain: "travel-bill-pwa.firebaseapp.com",
-  projectId: "travel-bill-pwa",
-  storageBucket: "travel-bill-pwa.firebasestorage.app",
-  messagingSenderId: "659146011260",
-  appId: "1:659146011260:web:22ef9d9c75628e19cecff9",
-  measurementId: "G-MLNEWK4C12"
-};
-// =====================================================
-
-let firebaseApp, db;
-let isOnline = navigator.onLine;
-
-// 全局数据
-let data = JSON.parse(localStorage.getItem('bookData')) || {
-    records:[],
-    deletedRecords:[],
-    assets:[],
-    currencies:[
-        {code:"USD",rate:7.2,default:false},
-        {code:"CNY",rate:1,default:true}
-    ]
-};
-let curMonth = new Date();
-let selectedDay = null;
-let chart1, chart2;
-
-// 本地保存
-function saveLocal(){
-    localStorage.setItem('bookData', JSON.stringify(data));
-}
-
-// 初始化firebase
-async function initFirebase(){
-    try{
-        firebaseApp = firebase.initializeApp(firebaseConfig);
-        db = firebase.database();
-        // 监听网络状态
-        firebase.database().ref('.info/connected').on('value', snap=>{
-            isOnline = snap.val() === true;
-            updateSyncStatus();
-            if(isOnline) uploadToCloud();
-        })
-        // 监听云端数据变化（其他设备修改自动拉取）
-        db.ref('mytally').on('value', snapshot=>{
-            const cloud = snapshot.val();
-            if(cloud){
-                data = cloud;
-                saveLocal();
-                renderAll();
-            }
-        })
-    }catch(e){
-        console.log("Firebase初始化失败，离线模式",e);
-    }
-}
-
-// 上传全部数据到云端
-function uploadToCloud(){
-    if(!db || !isOnline) return;
-    db.ref('mytally').set(data);
-}
-
-// 手动同步按钮
-function forceSync(){
-    uploadToCloud();
-    alert("已触发云端同步");
-}
-
-function updateSyncStatus(){
-    const el = document.getElementById("syncStatus");
-    if(isOnline){
-        el.textContent="在线";
-        el.className="sync-status sync-online";
-    }else{
-        el.textContent="离线";
-        el.className="sync-status sync-offline";
-    }
-}
-
-// 页面切换 + 底部tab高亮
-function switchPage(page){
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('page-'+page).classList.add('active');
-    document.querySelectorAll('.tab-bar button').forEach(btn=>{
-        btn.classList.remove('active');
-        if(btn.dataset.tab === page) btn.classList.add('active');
-    })
-    renderAll();
-}
-
-//记账弹窗
-function openBillModal(){
-    document.getElementById('editBillId').value = '';
-    document.getElementById('billAmt').value = '';
-    renderCurrencySelect('billCurrency');
-    renderAssetSelect('billAssetId');
-    document.getElementById('billNote').value = '';
-    document.getElementById('billCny').textContent = '0';
-    document.getElementById('billModal').classList.add('active');
-}
-function closeBillModal(){ document.getElementById('billModal').classList.remove('active'); }
-
-// 资产弹窗
-function openAssetModal(){
-    document.getElementById('assetName').value='';
-    renderCurrencySelect('assetCurrency');
-    document.getElementById('assetAmt').value='';
-    document.getElementById('assetModal').classList.add('active');
-}
-function closeAssetModal(){ document.getElementById('assetModal').classList.remove('active'); }
-
-//回收站弹窗
-function openRecycleModal(){ document.getElementById('recycleModal').classList.add('active'); renderRecycle(); }
-function closeRecycleModal(){ document.getElementById('recycleModal').classList.remove('active'); }
-
-//币种下拉渲染
-function renderCurrencySelect(selId){
-    const sel = document.getElementById(selId);
-    sel.innerHTML = '';
-    data.currencies.forEach(c=>{
-        const opt = document.createElement('option');
-        opt.value = c.code;
-        opt.textContent = c.code;
-        if(c.default) opt.selected = true;
-        sel.appendChild(opt);
-    })
-}
-//资产下拉渲染
-function renderAssetSelect(selId){
-    const sel = document.getElementById(selId);
-    sel.innerHTML = `<option value="">--请选择资产--</option>`;
-    data.assets.forEach(a=>{
-        const opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.name;
-        if(a.defaultAsset) opt.selected = true;
-        sel.appendChild(opt);
-    })
-}
-
-//币种列表（设置页）
-function renderCurrencyList(){
-    const wrap = document.getElementById('currencyList');
-    wrap.innerHTML = '';
-    data.currencies.forEach((c,idx)=>{
-        const div = document.createElement('div');
-        const rmbPerCur = c.rate;
-        const curPerRmb = (1 / rmbPerCur).toFixed(3);
-        div.className="flex items-center justify-between border p-1 my-1";
-        div.innerHTML = `
-            <label><input type="radio" name="defCur" ${c.default?'checked':''} onchange="setDefCur(${idx})"> 默认币种</label>
-            <span>${c.code}：${rmbPerCur} （1RMB=${curPerRmb}${c.code}）</span>
-            <button onclick="delCur(${idx})" class="text-red-500">删除</button>
-        `;
-        wrap.appendChild(div);
-    })
-}
-function addCurrency(){
-    const code = document.getElementById('newCurCode').value.trim();
-    const rate = Number(document.getElementById('newCurRate').value);
-    if(!code || !rate) return;
-    data.currencies.push({code, rate, default:false});
-    saveLocal(); uploadToCloud(); renderCurrencyList();
-    document.getElementById('newCurCode').value='';
-    document.getElementById('newCurRate').value='';
-}
-function delCur(idx){ data.currencies.splice(idx,1); saveLocal(); uploadToCloud(); renderCurrencyList(); }
-function setDefCur(idx){ data.currencies.forEach((c,i)=>c.default=(i===idx)); saveLocal(); uploadToCloud(); renderCurrencyList(); }
-
-//金额换算实时计算
-document.getElementById('billAmt')?.addEventListener('input',()=>{
-    const amt = Number(document.getElementById('billAmt').value||0);
-    const curCode = document.getElementById('billCurrency').value;
-    const cur = data.currencies.find(c=>c.code === curCode);
-    const cny = amt * (cur?.rate||1);
-    document.getElementById('billCny').textContent = cny.toFixed(2);
-})
-document.getElementById('billCurrency')?.addEventListener('change',()=>{
-    const evt = new Event('input'); document.getElementById('billAmt').dispatchEvent(evt);
-})
-
-//保存记账
-function saveBill(){
-    const type = document.querySelector('input[name="billType"]:checked').value;
-    const amt = Number(document.getElementById('billAmt').value);
-    const assetId = document.getElementById('billAssetId').value;
-    const curCode = document.getElementById('billCurrency').value;
-    const cat = document.getElementById('billCat').value;
-    const note = document.getElementById('billNote').value;
-    if(!assetId){ alert("请选择归属资产！"); return; }
-    const cur = data.currencies.find(c=>c.code===curCode);
-    const cny = amt * cur.rate;
-    const editId = document.getElementById('editBillId').value;
-    if(editId){
-        const r = data.records.find(x=>x.id === editId);
-        Object.assign(r,{type,amt,assetId,curCode,cat,note,cny,time:new Date().toISOString()});
-    }else{
-        data.records.push({id:Date.now().toString(),type,amt,assetId,curCode,cat,note,cny,time:new Date().toISOString()});
-    }
-    saveLocal(); uploadToCloud(); closeBillModal(); renderAll();
-}
-//编辑记录
-function editRecord(id){
-    const r = data.records.find(x=>x.id===id);
-    if(!r)return;
-    document.getElementById('editBillId').value=r.id;
-    document.querySelector(`input[name="billType"][value="${r.type}"]`).checked=true;
-    document.getElementById('billAmt').value=r.amt;
-    renderCurrencySelect('billCurrency');
-    document.getElementById('billCurrency').value=r.curCode;
-    renderAssetSelect('billAssetId');
-    document.getElementById('billAssetId').value=r.assetId;
-    document.getElementById('billCat').value=r.cat;
-    document.getElementById('billNote').value=r.note;
-    const evt = new Event('input'); document.getElementById('billAmt').dispatchEvent(evt);
-    document.getElementById('billModal').classList.add('active');
-}
-//删除记录（移入回收站）
-function delRecord(id){
-    const idx = data.records.findIndex(r=>r.id===id);
-    if(idx===-1)return;
-    const rec = data.records.splice(idx,1)[0];
-    data.deletedRecords.push(rec);
-    saveLocal(); uploadToCloud(); renderAll();
-}
-//恢复回收站记录
-function restoreRecord(id){
-    const idx = data.deletedRecords.findIndex(r=>r.id===id);
-    if(idx===-1)return;
-    const rec = data.deletedRecords.splice(idx,1)[0];
-    data.records.push(rec);
-    saveLocal(); uploadToCloud(); renderAll();
-}
-function renderRecycle(){
-    const wrap = document.getElementById('recycleList');
-    wrap.innerHTML='';
-    data.deletedRecords.forEach(r=>{
-        const assetInfo = data.assets.find(a=>a.id === r.assetId);
-        const assetName = assetInfo ? assetInfo.name : "资产已删除";
-        const div = document.createElement('div');
-        div.className="border p-2 my-1 flex justify-between";
-        div.innerHTML = `<span>${r.type==='expense'?'-':'+'}${r.cny.toFixed(2)}【${assetName}】${r.cat}</span><button onclick="restoreRecord('${r.id}')" class="text-green-500">恢复</button>`;
-        wrap.appendChild(div);
-    })
-}
-function showAllRecords(){
-    const wrap = document.getElementById('recordList');
-    wrap.innerHTML='';
-    const list = [...data.records].sort((a,b)=>new Date(b.time)-new Date(a.time));
-    list.forEach(r=>{
-        const assetInfo = data.assets.find(a=>a.id === r.assetId);
-        const assetName = assetInfo ? assetInfo.name : "资产已删除";
-        const div = document.createElement('div');
-        div.className="flex justify-between py-1 border-b";
-        div.innerHTML = `
-            <span>${new Date(r.time).toLocaleDateString()} ${r.type==='expense'?'-':'+'}${r.cny.toFixed(2)}【${assetName}】${r.cat} ${r.note}</span>
-            <div>
-                <button onclick="editRecord('${r.id}')" class="text-blue-500 text-sm">修改</button>
-                <button onclick="delRecord('${r.id}')" class="text-red-500 text-sm ml-1">删除</button>
-            </div>
-        `;
-        wrap.appendChild(div);
-    })
-}
-
-//资产保存
-function saveAsset(){
-    const name = document.getElementById('assetName').value.trim();
-    const amt = Number(document.getElementById('assetAmt').value);
-    const curCode = document.getElementById('assetCurrency').value;
-    const cur = data.currencies.find(c=>c.code===curCode);
-    const cny = amt * cur.rate;
-    data.assets.push({id:Date.now().toString(),name,amt,curCode,cny,defaultAsset:false,createTime:new Date().toISOString()});
-    saveLocal(); uploadToCloud(); closeAssetModal(); renderAll();
-}
-
-//资产页面渲染
-function renderAssetPage(){
-    const wrap = document.getElementById('assetList');
-    wrap.innerHTML='';
-    data.assets.forEach(a=>{
-        const div = document.createElement('div');
-        div.className="border p-2 my-1 flex items-center justify-between";
-        div.innerHTML = `
-            <div class="flex items-center gap-2">
-                <input type="radio" name="defaultAssetRadio" ${a.defaultAsset?'checked':''} onchange="setDefaultAsset('${a.id}')">
-                <span>${a.name}：${a.cny.toFixed(2)} RMB</span>
-            </div>
-        `;
-        wrap.appendChild(div);
-    })
-}
-//设置全局默认资产
-function setDefaultAsset(assetId){
-    data.assets.forEach(a=> a.defaultAsset = (a.id === assetId));
-    saveLocal(); uploadToCloud(); renderAll();
-}
-
-//日历
-function changeMonth(delta){
-    curMonth.setMonth(curMonth.getMonth()+delta);
-    renderCalendar();
-}
-function renderCalendar(){
-    const y = curMonth.getFullYear();
-    const m = curMonth.getMonth();
-    document.getElementById('calTitle').innerText = `${y}年${m+1}月`;
-    const wrap = document.getElementById('calGrid'); wrap.innerHTML='';
-    const first = new Date(y,m,1);
-    const last = new Date(y,m+1,0);
-    const startWeek = first.getDay();
-    for(let i=0;i<startWeek;i++){
-        const d = document.createElement('div'); d.innerText=''; wrap.appendChild(d);
-    }
-    for(let d=1;d<=last.getDate();d++){
-        const dayEl = document.createElement('div');
-        dayEl.className="border p-1 cursor-pointer";
-        const dayDate = new Date(y,m,d);
-        const dayStr = dayDate.toISOString().slice(0,10);
-        const dayRec = data.records.filter(r=>r.time.startsWith(dayStr));
-        let sum = 0;
-        dayRec.forEach(r=> sum += r.type==='expense' ? -r.cny : r.cny);
-        dayEl.innerHTML = `<div>${d}</div><div class="text-xs ${sum>=0?'text-green-600':'text-red-600'}">${sum.toFixed(0)}</div>`;
-        dayEl.onclick = ()=>{ selectedDay=dayStr; renderDayRecord(); }
-        wrap.appendChild(dayEl);
-    }
-}
-function renderDayRecord(){
-    const wrap = document.getElementById('dayRecord');
-    const list = data.records.filter(r=>r.time.startsWith(selectedDay));
-    if(list.length===0){ wrap.innerHTML='当日无记录';return; }
-    wrap.innerHTML = list.map(r=>{
-        const assetInfo = data.assets.find(a=>a.id === r.assetId);
-        const assetName = assetInfo ? assetInfo.name : "资产已删除";
-        return `<div>${r.type==='expense'?'-':'+'}${r.cny.toFixed(2)}【${assetName}】 ${r.cat} ${r.note}</div>`;
-    }).join('');
-}
-
-//绘制首页2个卡片饼图
-function drawHomeAssetCharts(){
-    if(chart1) chart1.destroy();
-    if(chart2) chart2.destroy();
-
-    const sel1 = document.getElementById('assetSelect1');
-    const aid1 = sel1.value;
-    if(aid1){
-        const assetA = data.assets.find(a=>a.id === aid1);
-        const spentA = data.records.filter(r=>r.assetId === aid1 && r.type==='expense').reduce((sum,item)=>sum+item.cny,0);
-        const leftA = assetA.cny - spentA;
-        document.getElementById('asset1Total').textContent = assetA.cny.toFixed(2);
-        document.getElementById('asset1Spent').textContent = spentA.toFixed(2);
-        document.getElementById('asset1Left').textContent = leftA.toFixed(2);
-        const ctx1 = document.getElementById('chart-asset1').getContext('2d');
-        chart1 = new Chart(ctx1,{type:'pie',data:{labels:['已支出','剩余'],datasets:[{data:[spentA,leftA],backgroundColor:['#ef4444','#22c55e']}]}});
-    }else{
-        document.getElementById('asset1Total').textContent = "0.00";
-        document.getElementById('asset1Spent').textContent = "0.00";
-        document.getElementById('asset1Left').textContent = "0.00";
-        const ctx1 = document.getElementById('chart-asset1').getContext('2d');
-        chart1 = new Chart(ctx1,{type:'pie',data:{labels:['已支出','剩余'],datasets:[{data:[0,0],backgroundColor:['#ef4444','#22c55e']}]}});
-    }
-
-    const sel2 = document.getElementById('assetSelect2');
-    const aid2 = sel2.value;
-    if(aid2){
-        const assetB = data.assets.find(a=>a.id === aid2);
-        const spentB = data.records.filter(r=>r.assetId === aid2 && r.type==='expense').reduce((sum,item)=>sum+item.cny,0);
-        const leftB = assetB.cny - spentB;
-        document.getElementById('asset2Total').textContent = assetB.cny.toFixed(2);
-        document.getElementById('asset2Spent').textContent = spentB.toFixed(2);
-        document.getElementById('asset2Left').textContent = leftB.toFixed(2);
-        const ctx2 = document.getElementById('chart-asset2').getContext('2d');
-        chart2 = new Chart(ctx2,{type:'pie',data:{labels:['已支出','剩余'],datasets:[{data:[spentB,leftB],backgroundColor:['#ef4444','#22c55e']}]}});
-    }else{
-        document.getElementById('asset2Total').textContent = "0.00";
-        document.getElementById('asset2Spent').textContent = "0.00";
-        document.getElementById('asset2Left').textContent = "0.00";
-        const ctx2 = document.getElementById('chart-asset2').getContext('2d');
-        chart2 = new Chart(ctx2,{type:'pie',data:{labels:['已支出','剩余'],datasets:[{data:[0,0],backgroundColor:['#ef4444','#22c55e']}]}});
-    }
-}
-
-function renderHomeAssetSelectors(){
-    renderAssetSelect("assetSelect1");
-    renderAssetSelect("assetSelect2");
-}
-
-function renderAll(){
-    showAllRecords();
-    renderCalendar();
-    renderHomeAssetSelectors();
-    drawHomeAssetCharts();
-    renderAssetPage();
-    renderCurrencyList();
-}
-
-//PWA注册service worker
-if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('sw.js').then(reg=>{
-        console.log("SW注册成功，离线缓存开启");
-    }).catch(err=>console.log("SW注册失败",err))
-}
-
-//初始化
-switchPage('home');
-initFirebase();
-</script>
+<body class="m-0 p-0">
+  <div id="app"></div>
+  <div id="modal"></div>
 </body>
 </html>
