@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>差旅记账PWA</title>
+<title>差旅记账本（离线本地版）</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f7f9; color: #222; }
@@ -540,6 +540,7 @@ async function delCurr(idx) {
   render();
 }
 
+// 把所有函数挂载到全局
 window.switchPage = switchPage;
 window.openBillPage = openBillPage;
 window.calcRmb = calcRmb;
@@ -559,6 +560,7 @@ window.addCurrency = addCurrency;
 window.setDefaultCurr = setDefaultCurr;
 window.delCurr = delCurr;
 
+// 初始化
 (async function init() {
   await loadAll();
   render();
