@@ -7,154 +7,104 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Firebase UMD CDN，无module问题 -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
+
 </head>
 <body class="m-0 p-0">
   <div id="app"></div>
   <div id="modal"></div>
 <script>
-    // ==========你的Firebase配置==========
-    const firebaseConfig = {
-      apiKey: "AIzaSyDf-uRiaSEKlUcOLVLhat0Max9YsianJWw",
-      authDomain: "travel-bill-pwa.firebaseapp.com",
-      projectId: "travel-bill-pwa",
-      storageBucket: "travel-bill-pwa.firebasestorage.app",
-      messagingSenderId: "659146011260",
-      appId: "1:659146011260:web:22ef9d9c75628e19cecff9",
-      measurementId: "G-MLNEWK4C12"
-    };
-    let db = null;
-    // 全局状态
-    const state = {
-      currentPage: 'home',
-      records: [],
-      deletedRecords: [],
-      assets: [],
-      currencies: [],
-      syncQueue: [],
-      isOnline: navigator.onLine
-    };
-    // IndexedDB简易封装
-    const dbName = 'travelBillDB';
-    const storeName = 'mainStore';
-    let idb;
-    function openDB() {
-      return new Promise((res, rej) => {
-        const req = indexedDB.open(dbName, 1);
-        req.onupgradeneeded = e => {
-          idb = e.target.result;
-          idb.createObjectStore(storeName);
-        };
-        req.onsuccess = e => {
-          idb = e.target.result; res(idb);
-        };
-        req.onerror = e => rej(e.target.error);
-      });
-    }
-    async function idbSave(key, data) {
-      await openDB();
-      const tx = idb.transaction(storeName, 'readwrite');
-      tx.objectStore(storeName).put(data, key);
-    }
-    async function idbLoad(key) {
-      await openDB();
-      const tx = idb.transaction(storeName, 'readonly');
-      return tx.objectStore(storeName).get(key);
-    }
-    // 云端同步函数
-    function initFirebase(){
-      try{
-        const fbApp = firebase.initializeApp(firebaseConfig);
-        db = firebase.firestore(fbApp);
-        console.log("✅ Firebase加载成功");
-        loadFromCloud();
-      }catch(e){
-        console.warn("⚠️ Firebase加载失败，仅本地模式可用",e);
-      }
-    }
-    async function syncToCloud() {
-      if (!state.isOnline || !db) return;
-      try {
-        // 保存记录
-        await db.collection('records').doc('data').set({list: state.records});
-        await db.collection('deletedRecords').doc('data').set({list: state.deletedRecords});
-        await db.collection('assets').doc('data').set({list: state.assets});
-        await db.collection('currencies').doc('data').set({list: state.currencies});
-        console.log("✅ 同步云端成功");
-      }catch(e){
-        console.error("同步失败",e);
-      }
-    }
-    async function loadFromCloud() {
-      if (!state.isOnline || !db) return;
-      try {
-        const recSnap = await db.collection('records').doc('data').get();
-        const delSnap = await db.collection('deletedRecords').doc('data').get();
-        const assetSnap = await db.collection('assets').doc('data').get();
-        const currSnap = await db.collection('currencies').doc('data').get();
-        if(recSnap.exists) state.records = recSnap.data().list;
-        if(delSnap.exists) state.deletedRecords = delSnap.data().list;
-        if(assetSnap.exists) state.assets = assetSnap.data().list;
-        if(currSnap.exists) state.currencies = currSnap.data().list;
-        await saveAllLocal();
-        render();
-        console.log("✅ 从云端拉取数据完成");
-      }catch(e){
-        console.error("拉取云端失败",e);
-      }
-    }
-    async function saveAllLocal(){
-      await idbSave('records', state.records);
-      await idbSave('deletedRecords', state.deletedRecords);
-      await idbSave('assets', state.assets);
-      await idbSave('currencies', state.currencies);
-    }
-    // 本地加载全部数据
-    async function loadAllLocal(){
-      state.records = await idbLoad('records') || [];
-      state.deletedRecords = await idbLoad('deletedRecords') || [];
-      state.assets = await idbLoad('assets') || [];
-      state.currencies = await idbLoad('currencies') || [{code:"USD",rate:6.72,isDefault:false}];
-    }
-    // 网络监听
-    window.addEventListener('online', async ()=>{
-      state.isOnline=true;
-      if(db) await loadFromCloud();
+    <script>
+  // 全局状态
+  const state = {
+    currentPage: 'home',
+    records: [],
+    deletedRecords: [],
+    assets: [],
+    currencies: [],
+    isOnline: navigator.onLine
+  };
+
+  // IndexedDB 封装
+  const dbName = 'travelBillDB';
+  const storeName = 'mainStore';
+  let idb;
+
+  function openDB() {
+    return new Promise((res, rej) => {
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = e => {
+        idb = e.target.result;
+        idb.createObjectStore(storeName);
+      };
+      req.onsuccess = e => {
+        idb = e.target.result;
+        res(idb);
+      };
+      req.onerror = e => rej(e.target.error);
     });
-    window.addEventListener('offline', ()=> state.isOnline=false);
-    // 生成唯一ID
-    function genId(){
-      return Date.now().toString(36)+Math.random().toString(36).slice(2);
-    }
-    // 保存并自动触发同步
-    async function saveData(){
-      await saveAllLocal();
-      syncToCloud();
-    }
-    // 页面渲染入口
-    function render(){
-      const app = document.getElementById('app');
-      if(state.currentPage==='home') renderHome(app);
-      else if(state.currentPage==='calendar') renderCalendar(app);
-      else if(state.currentPage==='asset') renderAsset(app);
-      else if(state.currentPage==='setting') renderSetting(app);
-    }
-    // 首页
-    function renderHome(app){
-      const travelAssets = state.assets.filter(a=>a.type==='travel');
-      const activityAssets = state.assets.filter(a=>a.type==='activity');
-      const travelTotal = travelAssets.reduce((s,i)=>s+i.amount,0);
-      const travelSpend = state.records.filter(r=>r.assetType==='travel'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
-      const travelRemain = travelTotal - travelSpend;
+  }
 
-      const actTotal = activityAssets.reduce((s,i)=>s+i.amount,0);
-      const actSpend = state.records.filter(r=>r.assetType==='activity'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
-      const actRemain = actTotal - actSpend;
+  async function idbSave(key, data) {
+    await openDB();
+    const tx = idb.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(data, key);
+  }
 
-      const allRecords = [...state.records].sort((a,b)=>new Date(b.time)-new Date(a.time));
+  async function idbLoad(key) {
+    await openDB();
+    const tx = idb.transaction(storeName, 'readonly');
+    return tx.objectStore(storeName).get(key);
+  }
 
-      app.innerHTML=`
+  async function saveAllLocal() {
+    await idbSave('records', state.records);
+    await idbSave('deletedRecords', state.deletedRecords);
+    await idbSave('assets', state.assets);
+    await idbSave('currencies', state.currencies);
+  }
+
+  async function loadAllLocal() {
+    state.records = await idbLoad('records') || [];
+    state.deletedRecords = await idbLoad('deletedRecords') || [];
+    state.assets = await idbLoad('assets') || [];
+    state.currencies = await idbLoad('currencies') || [{ code: 'CNY', rate: 1, isDefault: true }];
+  }
+
+  function genId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+  }
+
+  async function saveData() {
+    await saveAllLocal();
+  }
+
+  // 页面渲染入口
+  function render() {
+    const app = document.getElementById('app');
+    if (!app) return;
+
+    if (state.currentPage === 'home') renderHome(app);
+    else if (state.currentPage === 'calendar') renderCalendar(app);
+    else if (state.currentPage === 'asset') renderAsset(app);
+    else if (state.currentPage === 'setting') renderSetting(app);
+  }
+
+  // 首页
+  function renderHome(app) {
+    const travelAssets = state.assets.filter(a => a.type === 'travel');
+    const activityAssets = state.assets.filter(a => a.type === 'activity');
+
+    const travelTotal = travelAssets.reduce((s, i) => s + Number(i.amount || 0), 0);
+    const travelSpend = state.records.filter(r => r.assetType === 'travel' && r.type === 'expense').reduce((s, i) => s + Number(i.rmbAmount || 0), 0);
+    const travelRemain = travelTotal - travelSpend;
+
+    const actTotal = activityAssets.reduce((s, i) => s + Number(i.amount || 0), 0);
+    const actSpend = state.records.filter(r => r.assetType === 'activity' && r.type === 'expense').reduce((s, i) => s + Number(i.rmbAmount || 0), 0);
+    const actRemain = actTotal - actSpend;
+
+    const allRecords = [...state.records].sort((a, b) => new Date(b.time) - new Date(a.time));
+
+    app.innerHTML = `
       <div class="h-screen flex flex-col">
         <div class="flex-1 flex flex-col">
           <div class="h-[20%] p-2 border-b">
@@ -166,9 +116,9 @@
           <div class="h-[60%] p-2 overflow-auto border-b">
             <h3 class="font-semibold mb-2">收支明细</h3>
             <div id="recordList" class="space-y-1">
-              ${allRecords.slice(0,8).map(r=>`
+              ${allRecords.slice(0, 8).map(r => `
                 <div class="flex justify-between border p-1 rounded">
-                  <div>${r.time} ${r.type==='expense'?'-':'+'}${r.rmbAmount}元 ${r.category} ${r.note||''}</div>
+                  <div>${r.time} ${r.type === 'expense' ? '-' : '+'}${Number(r.rmbAmount).toFixed(2)}元 ${r.category} ${r.note || ''}</div>
                   <div class="space-x-2">
                     <button onclick="editRecord('${r.id}')" class="text-blue-500">修改</button>
                     <button onclick="delRecord('${r.id}')" class="text-red-500">删除</button>
@@ -183,39 +133,41 @@
             <button onclick="openBillPage()" class="w-full bg-blue-500 text-white py-2 rounded mb-2">开始记账</button>
             <div class="grid grid-cols-2 gap-2">
               <div class="border p-2 rounded">
-                <canvas id="travelChart"></canvas>
-                <div>差旅资产：总资产${travelTotal.toFixed(2)}，已支出${travelSpend.toFixed(2)}，剩余${travelRemain.toFixed(2)} RMB</div>
+                <div class="text-sm font-semibold mb-1">差旅资产</div>
+                <div>总额：${travelTotal.toFixed(2)} RMB</div>
+                <div>已支出：${travelSpend.toFixed(2)} RMB</div>
+                <div>剩余：${travelRemain.toFixed(2)} RMB</div>
               </div>
               <div class="border p-2 rounded">
-                <canvas id="actChart"></canvas>
-                <div>活动资产：总资产${actTotal.toFixed(2)}，已支出${actSpend.toFixed(2)}，剩余${actRemain.toFixed(2)} RMB</div>
+                <div class="text-sm font-semibold mb-1">活动资产</div>
+                <div>总额：${actTotal.toFixed(2)} RMB</div>
+                <div>已支出：${actSpend.toFixed(2)} RMB</div>
+                <div>剩余：${actRemain.toFixed(2)} RMB</div>
               </div>
             </div>
           </div>
         </div>
         <div class="flex border-t">
-          <button onclick="switchPage('home')" class="flex-1 py-3 ${state.currentPage==='home'?'bg-blue-100':''}">首页</button>
-          <button onclick="switchPage('calendar')" class="flex-1 py-3 ${state.currentPage==='calendar'?'bg-blue-100':''}">日历</button>
-          <button onclick="switchPage('asset')" class="flex-1 py-3 ${state.currentPage==='asset'?'bg-blue-100':''}">资产</button>
-          <button onclick="switchPage('setting')" class="flex-1 py-3 ${state.currentPage==='setting'?'bg-blue-100':''}">设置</button>
+          <button onclick="switchPage('home')" class="flex-1 py-3 ${state.currentPage === 'home' ? 'bg-blue-100' : ''}">首页</button>
+          <button onclick="switchPage('calendar')" class="flex-1 py-3 ${state.currentPage === 'calendar' ? 'bg-blue-100' : ''}">日历</button>
+          <button onclick="switchPage('asset')" class="flex-1 py-3 ${state.currentPage === 'asset' ? 'bg-blue-100' : ''}">资产</button>
+          <button onclick="switchPage('setting')" class="flex-1 py-3 ${state.currentPage === 'setting' ? 'bg-blue-100' : ''}">设置</button>
         </div>
       </div>`;
-      setTimeout(()=>{
-        new Chart(document.getElementById('travelChart'),{type:'pie',data:{labels:["已支出","剩余"],datasets:[{data:[travelSpend,travelRemain],backgroundColor:['#ef4444','#22c55e']}]},options:{responsive:true,maintainAspectRatio:true}});
-        new Chart(document.getElementById('actChart'),{type:'pie',data:{labels:["已支出","剩余"],datasets:[{data:[actSpend,actRemain],backgroundColor:['#ef4444','#22c55e']}]},options:{responsive:true,maintainAspectRatio:true}});
-      },100);
-    }
-    // 切换页面
-    function switchPage(page){
-      state.currentPage=page; render();
-    }
-    // 记账弹窗
-    window.openBillPage = function(){
-      const defaultCurrency = state.currencies.find(c=>c.isDefault) || state.currencies[0];
-      const defaultRate = defaultCurrency?.rate || 1;
-      const assetTypes = state.assets.map(a=>`<option value="${a.type}">${a.name||a.type}</option>`).join('');
-      const currencyOpts = state.currencies.map(c=>`<option value="${c.code}" data-rate="${c.rate}">${c.code}</option>`).join('');
-      const catOpts = `
+  }
+
+  function switchPage(page) {
+    state.currentPage = page;
+    render();
+  }
+
+  // 记账弹窗
+  function openBillPage() {
+    const defaultCurrency = state.currencies.find(c => c.isDefault) || state.currencies[0];
+    const assetTypes = state.assets.map(a => `<option value="${a.type}">${a.name || a.type}</option>`).join('');
+    const currencyOpts = state.currencies.map(c => `<option value="${c.code}" data-rate="${c.rate}">${c.code}</option>`).join('');
+
+    const catOpts = `
       <option value="交通-飞机">交通-飞机</option>
       <option value="交通-火车">交通-火车</option>
       <option value="交通-出租">交通-出租</option>
@@ -236,16 +188,17 @@
       <option value="通讯-话费">通讯-话费</option>
       <option value="通讯-网络">通讯-网络</option>
       <option value="其他">其他</option>`;
-      const html = `
+
+    const html = `
       <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
-        <div class="bg-white w-full max-md:w-full max-w-md rounded p-4">
+        <div class="bg-white w-full max-w-md rounded p-4">
           <div class="flex gap-2 mb-3">
             <label class="flex items-center"><input type="radio" name="billType" value="expense" checked>支出</label>
             <label class="flex items-center"><input type="radio" name="billType" value="income">收入</label>
           </div>
           <div class="grid grid-cols-3 gap-2 mb-3">
             <input type="number" id="billAmount" placeholder="金额" class="border p-2">
-            <select id="billAssetType" class="border p-2">${assetTypes}</select>
+            <select id="billAssetType" class="border p-2">${assetTypes || '<option value="travel">差旅资产</option>'}</select>
             <select id="billCurrency" class="border p-2" onchange="calcRmb()">${currencyOpts}</select>
           </div>
           <div class="text-sm text-gray-500 mb-3">换算RMB：<span id="rmbPreview">0</span></div>
@@ -257,75 +210,107 @@
           </div>
         </div>
       </div>`;
-      document.getElementById('modal').innerHTML = html;
-    }
-    window.calcRmb = function(){
-      const amount = Number(document.getElementById('billAmount').value||0);
-      const currSel = document.getElementById('billCurrency');
-      const rate = Number(currSel.options[currSel.selectedIndex].dataset.rate);
-      const rmb = amount * rate;
-      document.getElementById('rmbPreview').textContent = rmb.toFixed(2);
-    }
-    window.submitBill = async function(){
-      const type = document.querySelector('input[name="billType"]:checked').value;
-      const amount = Number(document.getElementById('billAmount').value);
-      const assetType = document.getElementById('billAssetType').value;
-      const currency = document.getElementById('billCurrency').value;
-      const category = document.getElementById('billCategory').value;
-      const note = document.getElementById('billNote').value;
-      const currItem = state.currencies.find(c=>c.code===currency);
-      const rmbAmount = amount * currItem.rate;
-      const rec = {id:genId(),time:new Date().toLocaleString(),type,amount,currency,rmbAmount,assetType,category,note};
-      state.records.push(rec);
-      await saveData();
-      closeBillModal(); render();
-    }
-    window.closeBillModal = function(){document.getElementById('modal').innerHTML='';}
-    // 删除记录，移入回收站
-    window.delRecord = async function(id){
-      const idx = state.records.findIndex(r=>r.id===id);
-      if(idx===-1) return;
-      const item = state.records.splice(idx,1)[0];
-      state.deletedRecords.push(item);
-      await saveData(); render();
-    }
-    window.editRecord = function(id){alert("编辑功能，你可以后续扩展");}
-    window.showAllRecords = function(){
-      const all = [...state.records].sort((a,b)=>new Date(b.time)-new Date(a.time));
-      let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
+
+    document.getElementById('modal').innerHTML = html;
+  }
+
+  function calcRmb() {
+    const amount = Number(document.getElementById('billAmount').value || 0);
+    const currSel = document.getElementById('billCurrency');
+    const rate = Number(currSel.options[currSel.selectedIndex].dataset.rate);
+    document.getElementById('rmbPreview').textContent = (amount * rate).toFixed(2);
+  }
+
+  async function submitBill() {
+    const type = document.querySelector('input[name="billType"]:checked').value;
+    const amount = Number(document.getElementById('billAmount').value);
+    const assetType = document.getElementById('billAssetType').value;
+    const currency = document.getElementById('billCurrency').value;
+    const category = document.getElementById('billCategory').value;
+    const note = document.getElementById('billNote').value;
+
+    const currItem = state.currencies.find(c => c.code === currency);
+    const rmbAmount = amount * currItem.rate;
+
+    const rec = {
+      id: genId(),
+      time: new Date().toLocaleString(),
+      type,
+      amount,
+      currency,
+      rmbAmount,
+      assetType,
+      category,
+      note
+    };
+
+    state.records.push(rec);
+    await saveData();
+    closeBillModal();
+    render();
+  }
+
+  function closeBillModal() {
+    document.getElementById('modal').innerHTML = '';
+  }
+
+  async function delRecord(id) {
+    const idx = state.records.findIndex(r => r.id === id);
+    if (idx === -1) return;
+    const item = state.records.splice(idx, 1)[0];
+    state.deletedRecords.push(item);
+    await saveData();
+    render();
+  }
+
+  function editRecord(id) {
+    alert('编辑功能暂未开放');
+  }
+
+  function showAllRecords() {
+    const all = [...state.records].sort((a, b) => new Date(b.time) - new Date(a.time));
+    let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
       <h2 class="font-bold text-lg mb-2">全部明细 <button onclick="closeModal()" class="float-right">关闭</button></h2>
-      ${all.map(r=>`<div class="border p-1 my-1">${r.time} ${r.type} ${r.rmbAmount}元 ${r.category} ${r.note||''}</div>`).join('')}</div></div>`;
-      document.getElementById('modal').innerHTML=html;
-    }
-    window.showRecycleBin = function(){
-      const list = state.deletedRecords;
-      let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
+      ${all.map(r => `<div class="border p-1 my-1">${r.time} ${r.type} ${Number(r.rmbAmount).toFixed(2)}元 ${r.category} ${r.note || ''}</div>`).join('')}</div></div>`;
+    document.getElementById('modal').innerHTML = html;
+  }
+
+  function showRecycleBin() {
+    const list = state.deletedRecords;
+    let html = `<div class="fixed inset-0 bg-black/50 p-4 overflow-auto"><div class="bg-white rounded p-4">
       <h2 class="font-bold text-lg mb-2">回收站 <button onclick="closeModal()" class="float-right">关闭</button></h2>
-      ${list.map(r=>`<div class="border p-1 my-1 flex justify-between">
-      <span>${r.time} ${r.type} ${r.rmbAmount}元 ${r.category}</span>
+      ${list.map(r => `<div class="border p-1 my-1 flex justify-between">
+      <span>${r.time} ${r.type} ${Number(r.rmbAmount).toFixed(2)}元 ${r.category}</span>
       <button onclick="restoreRecord('${r.id}')" class="text-green-500">恢复</button>
       </div>`).join('')}
       </div></div>`;
-      document.getElementById('modal').innerHTML=html;
-    }
-    window.restoreRecord = async function(id){
-      const idx = state.deletedRecords.findIndex(r=>r.id===id);
-      if(idx===-1) return;
-      const item = state.deletedRecords.splice(idx,1)[0];
-      state.records.push(item);
-      await saveData(); render(); closeModal();
-    }
-    window.closeModal = function(){document.getElementById('modal').innerHTML='';}
+    document.getElementById('modal').innerHTML = html;
+  }
 
-    // 日历页面
-    function renderCalendar(app){
-      const now = new Date();
-      let cy = now.getFullYear(), cm = now.getMonth();
-      app.innerHTML=`
+  async function restoreRecord(id) {
+    const idx = state.deletedRecords.findIndex(r => r.id === id);
+    if (idx === -1) return;
+    const item = state.deletedRecords.splice(idx, 1)[0];
+    state.records.push(item);
+    await saveData();
+    render();
+    closeModal();
+  }
+
+  function closeModal() {
+    document.getElementById('modal').innerHTML = '';
+  }
+
+  // 日历
+  function renderCalendar(app) {
+    const now = new Date();
+    let cy = now.getFullYear(), cm = now.getMonth();
+
+    app.innerHTML = `
       <div class="h-screen flex flex-col">
         <div class="p-2 border-b flex justify-between items-center">
           <button onclick="changeMonth(-1)">上一月</button>
-          <h2 id="calTitle">${cy}年${cm+1}月</h2>
+          <h2 id="calTitle">${cy}年${cm + 1}月</h2>
           <button onclick="changeMonth(1)">下一月</button>
         </div>
         <div id="calGrid" class="grid grid-cols-7 gap-1 p-2 flex-1 overflow-auto"></div>
@@ -337,60 +322,70 @@
           <button onclick="switchPage('setting')" class="flex-1 py-3">设置</button>
         </div>
       </div>`;
-      renderCalGrid(cy,cm);
-    }
-    window.changeMonth = function(delta){
-      const title = document.getElementById('calTitle').innerText;
-      let [y,m] = title.match(/(\d+)/g).map(Number);
-      m += delta;
-      if(m>11){m=0;y++}
-      if(m<0){m=11;y--}
-      document.getElementById('calTitle').innerText = `${y}年${m+1}月`;
-      renderCalGrid(y,m);
-    }
-    function renderCalGrid(y,m){
-      const grid = document.getElementById('calGrid');
-      const firstDay = new Date(y,m,1).getDay();
-      const totalDays = new Date(y,m+1,0).getDate();
-      let html = '';
-      for(let i=0;i<firstDay;i++) html += `<div></div>`;
-      for(let d=1;d<=totalDays;d++){
-        const dayStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const dayRecs = state.records.filter(r=>r.time.startsWith(dayStr));
-        const sum = dayRecs.reduce((s,i)=>i.type==='expense'?s-i.rmbAmount:s+i.rmbAmount,0);
-        html += `<div class="border p-1 text-center cursor-pointer" onclick="showDayRec('${dayStr}')">${d}<br><span class="text-xs ${sum>=0?'text-green-600':'text-red-600'}">${sum.toFixed(2)}</span></div>`;
-      }
-      grid.innerHTML = html;
-    }
-    window.showDayRec = function(dayStr){
-      const recs = state.records.filter(r=>r.time.startsWith(dayStr));
-      const box = document.getElementById('dayRecords');
-      box.innerHTML = `<div class="font-semibold">${dayStr}记录</div>` + recs.map(r=>`<div>${r.time} ${r.type} ${r.rmbAmount}元 ${r.category} ${r.note||''}</div>`).join('');
-    }
-    //资产页面
-    function renderAsset(app){
-      const travelAssets = state.assets.filter(a=>a.type==='travel');
-      const activityAssets = state.assets.filter(a=>a.type==='activity');
-      const travelTotal = travelAssets.reduce((s,i)=>s+i.amount,0);
-      const travelSpend = state.records.filter(r=>r.assetType==='travel'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
-      const travelRemain = travelTotal - travelSpend;
 
-      const actTotal = activityAssets.reduce((s,i)=>s+i.amount,0);
-      const actSpend = state.records.filter(r=>r.assetType==='activity'&&r.type==='expense').reduce((s,i)=>s+i.rmbAmount,0);
-      const actRemain = actTotal - actSpend;
-      app.innerHTML=`
+    renderCalGrid(cy, cm);
+  }
+
+  function changeMonth(delta) {
+    const title = document.getElementById('calTitle').innerText;
+    let [y, m] = title.match(/\d+/g).map(Number);
+    m += delta;
+    if (m > 11) { m = 0; y++; }
+    if (m < 0) { m = 11; y--; }
+    document.getElementById('calTitle').innerText = `${y}年${m + 1}月`;
+    renderCalGrid(y, m);
+  }
+
+  function renderCalGrid(y, m) {
+    const grid = document.getElementById('calGrid');
+    const firstDay = new Date(y, m, 1).getDay();
+    const totalDays = new Date(y, m + 1, 0).getDate();
+    let html = '';
+
+    for (let i = 0; i < firstDay; i++) html += `<div></div>`;
+    for (let d = 1; d <= totalDays; d++) {
+      const dayStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const dayRecs = state.records.filter(r => r.time.startsWith(dayStr));
+      const sum = dayRecs.reduce((s, i) => i.type === 'expense' ? s - Number(i.rmbAmount || 0) : s + Number(i.rmbAmount || 0), 0);
+      html += `<div class="border p-1 text-center cursor-pointer" onclick="showDayRec('${dayStr}')">${d}<br><span class="text-xs ${sum >= 0 ? 'text-green-600' : 'text-red-600'}">${sum.toFixed(2)}</span></div>`;
+    }
+
+    grid.innerHTML = html;
+  }
+
+  function showDayRec(dayStr) {
+    const recs = state.records.filter(r => r.time.startsWith(dayStr));
+    const box = document.getElementById('dayRecords');
+    box.innerHTML = `<div class="font-semibold">${dayStr}记录</div>` +
+      recs.map(r => `<div>${r.time} ${r.type} ${Number(r.rmbAmount).toFixed(2)}元 ${r.category} ${r.note || ''}</div>`).join('');
+  }
+
+  // 资产页
+  function renderAsset(app) {
+    const travelAssets = state.assets.filter(a => a.type === 'travel');
+    const activityAssets = state.assets.filter(a => a.type === 'activity');
+
+    const travelTotal = travelAssets.reduce((s, i) => s + Number(i.amount || 0), 0);
+    const travelSpend = state.records.filter(r => r.assetType === 'travel' && r.type === 'expense').reduce((s, i) => s + Number(i.rmbAmount || 0), 0);
+    const travelRemain = travelTotal - travelSpend;
+
+    const actTotal = activityAssets.reduce((s, i) => s + Number(i.amount || 0), 0);
+    const actSpend = state.records.filter(r => r.assetType === 'activity' && r.type === 'expense').reduce((s, i) => s + Number(i.rmbAmount || 0), 0);
+    const actRemain = actTotal - actSpend;
+
+    app.innerHTML = `
       <div class="h-screen flex flex-col p-2">
         <h2 class="text-lg font-bold mb-2">资产管理</h2>
         <button onclick="addAssetModal()" class="bg-blue-500 text-white py-2 rounded mb-2">新增资产</button>
         <div class="border p-2 rounded mb-2">
           <h3>差旅资产汇总(RMB)</h3>
           <p>资产总额：${travelTotal.toFixed(2)} | 总支出：${travelSpend.toFixed(2)} | 剩余：${travelRemain.toFixed(2)}</p>
-          ${travelAssets.map(a=>`<div>${a.name}：${a.amount}</div>`).join('')}
+          ${travelAssets.map(a => `<div>${a.name}：${Number(a.amount).toFixed(2)}</div>`).join('')}
         </div>
         <div class="border p-2 rounded mb-2">
           <h3>活动资产汇总(RMB)</h3>
           <p>资产总额：${actTotal.toFixed(2)} | 总支出：${actSpend.toFixed(2)} | 剩余：${actRemain.toFixed(2)}</p>
-          ${activityAssets.map(a=>`<div>${a.name}：${a.amount}</div>`).join('')}
+          ${activityAssets.map(a => `<div>${a.name}：${Number(a.amount).toFixed(2)}</div>`).join('')}
         </div>
         <div class="flex-1"></div>
         <div class="flex border-t">
@@ -400,9 +395,10 @@
           <button onclick="switchPage('setting')" class="flex-1 py-3">设置</button>
         </div>
       </div>`;
-    }
-    window.addAssetModal = function(){
-      const html = `
+  }
+
+  function addAssetModal() {
+    const html = `
       <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
         <div class="bg-white w-full max-w-md rounded p-4">
           <h3 class="font-bold mb-2">新增资产</h3>
@@ -418,24 +414,38 @@
           </div>
         </div>
       </div>`;
-      document.getElementById('modal').innerHTML = html;
-    }
-    window.saveAsset = async function(){
-      const name = document.getElementById('assetName').value;
-      const amount = Number(document.getElementById('assetAmt').value);
-      const type = document.getElementById('assetType').value;
-      state.assets.push({id:genId(), name, amount, type, createTime:new Date().toLocaleString()});
-      await saveData(); closeModal(); render();
-    }
-    // 设置页面
-    function renderSetting(app){
-      const currHtml = state.currencies.map((c,idx)=>`
+
+    document.getElementById('modal').innerHTML = html;
+  }
+
+  async function saveAsset() {
+    const name = document.getElementById('assetName').value;
+    const amount = Number(document.getElementById('assetAmt').value);
+    const type = document.getElementById('assetType').value;
+
+    state.assets.push({
+      id: genId(),
+      name,
+      amount,
+      type,
+      createTime: new Date().toLocaleString()
+    });
+
+    await saveData();
+    closeModal();
+    render();
+  }
+
+  // 设置页
+  function renderSetting(app) {
+    const currHtml = state.currencies.map((c, idx) => `
       <div class="border p-2 my-1 flex items-center gap-2">
-        <input type="radio" name="defCurr" ${c.isDefault?'checked':''} onchange="setDefaultCurr(${idx})">
+        <input type="radio" name="defCurr" ${c.isDefault ? 'checked' : ''} onchange="setDefaultCurr(${idx})">
         <span>${c.code}：${c.rate} （1${c.code}=${c.rate} RMB）</span>
         <button onclick="delCurr(${idx})" class="text-red-500">删除</button>
       </div>`).join('');
-      app.innerHTML=`
+
+    app.innerHTML = `
       <div class="h-screen flex flex-col p-2">
         <h2 class="text-lg font-bold mb-2">设置</h2>
         <div class="border p-2 rounded mb-2">
@@ -455,28 +465,62 @@
           <button onclick="switchPage('setting')" class="flex-1 py-3 bg-blue-100">设置</button>
         </div>
       </div>`;
+  }
+
+  async function addCurrency() {
+    const code = document.getElementById('newCode').value.trim().toUpperCase();
+    const rate = Number(document.getElementById('newRate').value);
+
+    if (!code || isNaN(rate)) {
+      alert('填写币种和汇率');
+      return;
     }
-    window.addCurrency = async function(){
-      const code = document.getElementById('newCode').value.trim().toUpperCase();
-      const rate = Number(document.getElementById('newRate').value);
-      if(!code || isNaN(rate)) return alert("填写币种和汇率");
-      state.currencies.push({code, rate, isDefault:false});
-      await saveData(); render();
-    }
-    window.setDefaultCurr = async function(idx){
-      state.currencies.forEach((c,i)=>c.isDefault = i===idx);
-      await saveData(); render();
-    }
-    window.delCurr = async function(idx){
-      state.currencies.splice(idx,1);
-      await saveData(); render();
-    }
-    // 初始化
-    async function init(){
-      await loadAllLocal();
-      render();
-      initFirebase();
-    }
-    init();
+
+    state.currencies.push({ code, rate, isDefault: false });
+    await saveData();
+    render();
+  }
+
+  async function setDefaultCurr(idx) {
+    state.currencies.forEach((c, i) => c.isDefault = i === idx);
+    await saveData();
+    render();
+  }
+
+  async function delCurr(idx) {
+    state.currencies.splice(idx, 1);
+    await saveData();
+    render();
+  }
+
+  // 初始化
+  async function init() {
+    await loadAllLocal();
+    render();
+  }
+
+  // 暴露给 onclick 使用
+  window.switchPage = switchPage;
+  window.openBillPage = openBillPage;
+  window.calcRmb = calcRmb;
+  window.submitBill = submitBill;
+  window.closeBillModal = closeBillModal;
+  window.delRecord = delRecord;
+  window.editRecord = editRecord;
+  window.showAllRecords = showAllRecords;
+  window.showRecycleBin = showRecycleBin;
+  window.restoreRecord = restoreRecord;
+  window.closeModal = closeModal;
+  window.changeMonth = changeMonth;
+  window.showDayRec = showDayRec;
+  window.addAssetModal = addAssetModal;
+  window.saveAsset = saveAsset;
+  window.addCurrency = addCurrency;
+  window.setDefaultCurr = setDefaultCurr;
+  window.delCurr = delCurr;
+
+  init();
+</script>
+
 </script>
 </html>
