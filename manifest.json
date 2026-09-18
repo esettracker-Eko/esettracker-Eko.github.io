@@ -1,0 +1,15 @@
+{
+  "name": "差旅记账本",
+  "short_name": "记账",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2605/2605436.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
