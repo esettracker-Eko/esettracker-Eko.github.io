@@ -4,13 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>差旅记账PWA</title>
-  <link rel="manifest" href="manifest.json">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Firebase CDN -->
+  <!-- Firebase UMD CDN，无module问题 -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
-  <script>
+</head>
+<body class="m-0 p-0">
+  <div id="app"></div>
+  <div id="modal"></div>
+<script>
     // ==========你的Firebase配置==========
     const firebaseConfig = {
       apiKey: "AIzaSyDf-uRiaSEKlUcOLVLhat0Max9YsianJWw",
@@ -21,8 +24,7 @@
       appId: "1:659146011260:web:22ef9d9c75628e19cecff9",
       measurementId: "G-MLNEWK4C12"
     };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
+    let db = null;
     // 全局状态
     const state = {
       currentPage: 'home',
@@ -61,8 +63,18 @@
       return tx.objectStore(storeName).get(key);
     }
     // 云端同步函数
+    function initFirebase(){
+      try{
+        const fbApp = firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore(fbApp);
+        console.log("✅ Firebase加载成功");
+        loadFromCloud();
+      }catch(e){
+        console.warn("⚠️ Firebase加载失败，仅本地模式可用",e);
+      }
+    }
     async function syncToCloud() {
-      if (!state.isOnline) return;
+      if (!state.isOnline || !db) return;
       try {
         // 保存记录
         await db.collection('records').doc('data').set({list: state.records});
@@ -70,12 +82,12 @@
         await db.collection('assets').doc('data').set({list: state.assets});
         await db.collection('currencies').doc('data').set({list: state.currencies});
         console.log("✅ 同步云端成功");
-      } catch(e) {
+      }catch(e){
         console.error("同步失败",e);
       }
     }
     async function loadFromCloud() {
-      if (!state.isOnline) return;
+      if (!state.isOnline || !db) return;
       try {
         const recSnap = await db.collection('records').doc('data').get();
         const delSnap = await db.collection('deletedRecords').doc('data').get();
@@ -108,7 +120,7 @@
     // 网络监听
     window.addEventListener('online', async ()=>{
       state.isOnline=true;
-      await loadFromCloud();
+      if(db) await loadFromCloud();
     });
     window.addEventListener('offline', ()=> state.isOnline=false);
     // 生成唯一ID
@@ -463,13 +475,8 @@
     async function init(){
       await loadAllLocal();
       render();
-      if(state.isOnline) loadFromCloud();
+      initFirebase();
     }
     init();
-  </script>
-</head>
-<body class="m-0 p-0">
-  <div id="app"></div>
-  <div id="modal"></div>
-</body>
+</script>
 </html>
